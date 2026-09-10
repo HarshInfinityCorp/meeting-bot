@@ -87,12 +87,12 @@ def transcribe(audio_path: str, mode: str = "transcribe", language: str = "en-IN
         sys.exit(1)
 
     result_file = result_files[-1]  # latest
-    with open(result_file, "r") as f:
+    with open(result_file, "r", encoding="utf-8") as f:
         result = json.load(f)
 
     # Also save a human-readable version
     readable_path = OUTPUT_DIR / f"{audio_file.stem}_transcript.txt"
-    with open(readable_path, "w") as f:
+    with open(readable_path, "w", encoding="utf-8") as f:
         f.write(f"=== Transcript: {audio_file.name} ===\n")
         f.write(f"Mode: {mode} | Language: {language}\n")
         f.write(f"{'=' * 50}\n\n")
