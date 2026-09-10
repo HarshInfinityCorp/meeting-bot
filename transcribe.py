@@ -57,7 +57,7 @@ def generate_summary(transcript_text: str, diarized_entries: list = None) -> str
     system_prompt = """You are a professional meeting summarizer. You MUST produce all three sections completely. Be concise — use short bullet points, not long paragraphs.
 
 ## MEETING AGENDA
-List the main topics discussed (max 8-10 bullet points, one line each).
+List only the 3-5 most important topics discussed. Group related items together. Keep it short.
 
 ## OVERALL SUMMARY
 A concise 3-5 sentence paragraph covering the key discussion points and important details.
