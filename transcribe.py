@@ -29,6 +29,7 @@ load_dotenv(Path(__file__).parent / ".env")
 
 SARVAM_API_KEY = os.getenv("SARVAM_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK")
 GEMINI_BASE_URL = "https://nextbase-model-gateway.infinitycorp.tech/v1/gemini"
 GEMINI_MODEL = "gemini-2.5-pro"
 OUTPUT_DIR = Path(__file__).parent / "output"
@@ -277,7 +278,66 @@ def transcribe(
                 print(summary.encode("ascii", errors="replace").decode())
             print(f"\nSummary saved: {summary_path}")
 
+    # Step 7: Send to Discord via webhook
+    if summary and DISCORD_WEBHOOK:
+        send_to_discord(
+            summary=summary,
+            audio_name=audio_file.name,
+            transcript_path=readable_path,
+            summary_path=OUTPUT_DIR / f"{audio_file.stem}_summary.txt",
+        )
+
     return result
+
+
+def send_to_discord(summary: str, audio_name: str, transcript_path: Path, summary_path: Path):
+    """
+    Send meeting summary text + attach transcript and summary files to Discord via webhook.
+    """
+    print("\n7. Sending to Discord...")
+
+    try:
+        # Truncate summary for Discord message (max 2000 chars)
+        header = f"**Meeting Summary: {audio_name}**\n\n"
+        max_summary_len = 1900 - len(header)
+        display_summary = summary[:max_summary_len]
+        if len(summary) > max_summary_len:
+            display_summary += "\n\n_(full summary attached as file)_"
+        message_content = header + display_summary
+
+        # Build multipart form data with files
+        files_to_send = {}
+        if transcript_path.exists():
+            files_to_send["file1"] = (
+                transcript_path.name,
+                open(transcript_path, "rb"),
+                "text/plain",
+            )
+        if summary_path.exists():
+            files_to_send["file2"] = (
+                summary_path.name,
+                open(summary_path, "rb"),
+                "text/plain",
+            )
+
+        data = {"content": message_content}
+
+        response = httpx.post(
+            DISCORD_WEBHOOK,
+            data=data,
+            files=list(files_to_send.items()),
+            timeout=30.0,
+        )
+        response.raise_for_status()
+
+        # Close file handles
+        for _, file_tuple in files_to_send.items():
+            file_tuple[1].close()
+
+        print("   Sent to Discord!")
+
+    except Exception as e:
+        print(f"   Warning: Discord webhook failed - {e}")
 
 
 def main():
