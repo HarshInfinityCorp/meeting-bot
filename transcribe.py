@@ -54,18 +54,18 @@ def generate_summary(transcript_text: str, diarized_entries: list = None) -> str
     else:
         context = transcript_text
 
-    system_prompt = """You are a professional meeting summarizer. Analyze the following meeting transcript and provide a structured summary in exactly this format:
+    system_prompt = """You are a professional meeting summarizer. You MUST produce all three sections completely. Be concise — use short bullet points, not long paragraphs.
 
 ## MEETING AGENDA
-List the main topics/agenda items discussed in the meeting as bullet points.
+List the main topics discussed (max 8-10 bullet points, one line each).
 
 ## OVERALL SUMMARY
-Provide a concise but comprehensive summary of the entire meeting discussion. Cover key points, discussions, and any important details mentioned.
+A concise 3-5 sentence paragraph covering the key discussion points and important details.
 
 ## OUTCOME
-List the outcomes, decisions made, action items, and next steps discussed in the meeting as bullet points.
+List decisions made, action items, and next steps (max 8-10 bullet points, one line each).
 
-Be concise, accurate, and only include information that was actually discussed in the transcript. Do not make up or assume anything not present in the transcript."""
+Rules: Be concise. Only include facts from the transcript. Complete ALL three sections."""
 
     print("6. Generating meeting summary (Sarvam 105B)...")
 
@@ -80,7 +80,7 @@ Be concise, accurate, and only include information that was actually discussed i
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"Here is the meeting transcript:\n\n{context}"}
             ],
-            "max_tokens": 2000,
+            "max_tokens": 4000,
             "temperature": 0.3,
         }
 
