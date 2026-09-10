@@ -88,7 +88,7 @@ Rules: Be concise. Only include facts from the transcript. Complete ALL three se
             "https://api.sarvam.ai/v1/chat/completions",
             headers=headers,
             json=payload,
-            timeout=60.0,
+            timeout=180.0,
         )
         response.raise_for_status()
         result = response.json()
