@@ -2,7 +2,7 @@
 """
 Meeting Bot Transcriber
 - Sarvam Batch API for speech-to-text (with diarization)
-- Google Gemini for meeting summary (free tier)
+- Gemini 2.5 Pro (via NBMG proxy) for meeting summary
 
 Usage:
     python transcribe.py <audio_file> [--mode transcribe|translate|verbatim|codemix] [--lang en-IN] [--speakers 2] [--no-summary]
@@ -29,6 +29,8 @@ load_dotenv(Path(__file__).parent / ".env")
 
 SARVAM_API_KEY = os.getenv("SARVAM_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_BASE_URL = "https://nextbase-model-gateway.infinitycorp.tech/v1/gemini"
+GEMINI_MODEL = "gemini-2.5-pro"
 OUTPUT_DIR = Path(__file__).parent / "output"
 
 
@@ -40,12 +42,11 @@ def _fmt_time(seconds: float) -> str:
 
 def generate_summary(transcript_text: str, diarized_entries: list = None) -> str:
     """
-    Generate a meeting summary using Google Gemini 2.0 Flash (free tier).
+    Generate a meeting summary using Gemini 2.5 Pro via NBMG proxy.
     Returns formatted summary with: Meeting Agenda, Overall Summary, Outcome.
     """
     if not GEMINI_API_KEY:
         print("   Skipping summary - GEMINI_API_KEY not found in .env")
-        print("   Get a free key from: https://aistudio.google.com/apikey")
         return ""
 
     # Build context from diarized transcript if available
@@ -59,10 +60,10 @@ def generate_summary(transcript_text: str, diarized_entries: list = None) -> str
     else:
         context = transcript_text
 
-    prompt = (
+    system_prompt = (
         "You are a professional meeting summarizer. "
-        "Analyze the following meeting transcript and provide a structured summary "
-        "in exactly this format:\n\n"
+        "You MUST produce all three sections completely. "
+        "Be concise - use short bullet points, not long paragraphs.\n\n"
         "## MEETING AGENDA\n"
         "List only the 3-5 most important topics discussed. "
         "Group related items together. Keep it short.\n\n"
@@ -73,46 +74,47 @@ def generate_summary(transcript_text: str, diarized_entries: list = None) -> str
         "List decisions made, action items, and next steps "
         "(max 8-10 bullet points, one line each).\n\n"
         "Rules: Be concise. Only include facts from the transcript. "
-        "Complete ALL three sections.\n\n"
-        "--- TRANSCRIPT ---\n"
-        f"{context}\n"
-        "--- END TRANSCRIPT ---"
+        "Complete ALL three sections."
     )
 
-    print("6. Generating meeting summary (Google Gemini)...")
+    print(f"6. Generating meeting summary ({GEMINI_MODEL} via NBMG)...")
 
     try:
-        url = (
-            "https://generativelanguage.googleapis.com/v1beta/"
-            f"models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
-        )
+        url = f"{GEMINI_BASE_URL}/chat/completions"
 
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "temperature": 0.3,
-                "maxOutputTokens": 4000,
-            },
+        headers = {
+            "Authorization": f"Bearer {GEMINI_API_KEY}",
+            "Content-Type": "application/json",
         }
 
-        response = httpx.post(url, json=payload, timeout=120.0)
+        payload = {
+            "model": GEMINI_MODEL,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Here is the meeting transcript:\n\n{context}"},
+            ],
+            "max_tokens": 4000,
+            "temperature": 0.3,
+        }
+
+        response = httpx.post(url, headers=headers, json=payload, timeout=180.0)
         response.raise_for_status()
         result = response.json()
 
-        # Extract summary text
-        summary = result["candidates"][0]["content"]["parts"][0]["text"]
+        # OpenAI-compatible response format
+        summary = result["choices"][0]["message"]["content"]
 
         if not summary:
-            print("   Warning: Gemini returned empty response.")
+            print("   Warning: API returned empty content.")
             return ""
 
         # Token usage
-        usage = result.get("usageMetadata", {})
-        input_tokens = usage.get("promptTokenCount", 0)
-        output_tokens = usage.get("candidatesTokenCount", 0)
+        usage = result.get("usage", {})
+        input_tokens = usage.get("prompt_tokens", 0)
+        output_tokens = usage.get("completion_tokens", 0)
 
         print(f"   Summary generated! (tokens: {input_tokens} in / {output_tokens} out)")
-        print("   Cost: FREE (Gemini free tier)")
+        print(f"   Cost: FREE (NBMG proxy)")
 
         return summary
 
@@ -130,7 +132,7 @@ def transcribe(
 ) -> dict:
     """
     Transcribe an audio file using Sarvam Batch API with speaker diarization,
-    then generate a meeting summary using Google Gemini.
+    then generate a meeting summary using Gemini 2.5 Pro.
     """
     if not SARVAM_API_KEY:
         print("SARVAM_API_KEY not found. Set it in .env file.")
@@ -240,7 +242,7 @@ def transcribe(
             count = sum(1 for e in entries if e.get("speaker_id") == sid)
             print(f"   Speaker {int(sid) + 1}: {count} segments")
 
-    # Step 6: Generate meeting summary (Gemini)
+    # Step 6: Generate meeting summary (Gemini 2.5 Pro via NBMG)
     if not skip_summary:
         diarized = result.get("diarized_transcript", {})
         entries_for_summary = diarized.get("entries", [])
@@ -253,7 +255,7 @@ def transcribe(
             summary_path = OUTPUT_DIR / f"{audio_file.stem}_summary.txt"
             with open(summary_path, "w", encoding="utf-8") as f:
                 f.write(f"=== Meeting Summary: {audio_file.name} ===\n")
-                f.write("Generated using: Google Gemini 2.0 Flash\n")
+                f.write(f"Generated using: {GEMINI_MODEL} via NBMG\n")
                 f.write(f"{'=' * 50}\n\n")
                 f.write(summary)
                 f.write("\n")
@@ -269,7 +271,6 @@ def transcribe(
             print(f"\n{'=' * 50}")
             print("MEETING SUMMARY")
             print(f"{'=' * 50}")
-            # Safe print for Windows console
             try:
                 print(summary)
             except UnicodeEncodeError:
@@ -281,7 +282,7 @@ def transcribe(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Transcribe audio using Sarvam Batch API + Gemini summary"
+        description="Transcribe audio using Sarvam + Gemini 2.5 Pro summary"
     )
     parser.add_argument("audio", help="Path to audio file (mp3, wav, etc.)")
     parser.add_argument(
