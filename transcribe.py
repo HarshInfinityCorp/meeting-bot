@@ -92,7 +92,21 @@ Rules: Be concise. Only include facts from the transcript. Complete ALL three se
         )
         response.raise_for_status()
         result = response.json()
-        summary = result["choices"][0]["message"]["content"]
+
+        # Debug: save raw API response to check structure
+        debug_path = OUTPUT_DIR / "_debug_summary_response.json"
+        OUTPUT_DIR.mkdir(exist_ok=True)
+        with open(debug_path, "w", encoding="utf-8") as df:
+            json.dump(result, df, indent=2, ensure_ascii=False)
+        print(f"   Debug response saved: {debug_path}")
+
+        # Extract summary — handle multiple possible response structures
+        message = result["choices"][0]["message"]
+        summary = message.get("content") or message.get("reasoning_content") or ""
+
+        if not summary:
+            print(f"   Warning: API returned empty content. Check {debug_path}")
+            return ""
 
         # Calculate token usage and cost
         usage = result.get("usage", {})
