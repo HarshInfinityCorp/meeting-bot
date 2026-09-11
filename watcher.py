@@ -6,8 +6,8 @@ When a new file is detected → transcribe → summarize → send to Discord.
 Already-processed files are tracked in processed.json and skipped.
 
 Usage:
-    python watcher.py                  # Watch with default 10s interval
-    python watcher.py --interval 5     # Check every 5 seconds
+    python watcher.py                    # Watch with default 30-minute interval
+    python watcher.py --interval 300     # Check every 5 minutes
     python watcher.py --once           # Process new files once and exit
 """
 
@@ -115,7 +115,7 @@ def process_file(audio_path: Path, processed: dict) -> bool:
         return False
 
 
-def watch(interval: int = 10, run_once: bool = False):
+def watch(interval: int = 1800, run_once: bool = False):
     """
     Main watcher loop.
     Scans speech/ folder every `interval` seconds for new audio files.
@@ -172,8 +172,8 @@ def main():
     parser.add_argument(
         "--interval",
         type=int,
-        default=10,
-        help="Check interval in seconds (default: 10)",
+        default=1800,
+        help="Check interval in seconds (default: 1800 / 30 minutes)",
     )
     parser.add_argument(
         "--once",
