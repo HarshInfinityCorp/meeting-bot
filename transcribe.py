@@ -2,7 +2,8 @@
 """
 Meeting Bot Transcriber
 - Sarvam Batch API for speech-to-text (with diarization)
-- xAI Composer 2.5 for meeting summary
+- Composer 2.5 (via NBMG xAI proxy) for meeting summary
+- Discord webhook for auto-delivery
 
 Usage:
     python transcribe.py <audio_file> [--mode transcribe|translate|verbatim|codemix] [--lang en-IN] [--speakers 2] [--no-summary]
@@ -28,10 +29,10 @@ import httpx
 load_dotenv(Path(__file__).parent / ".env")
 
 SARVAM_API_KEY = os.getenv("SARVAM_API_KEY")
-XAI_API_KEY = os.getenv("XAI_API_KEY")
+NBMG_API_KEY = os.getenv("NBMG_API_KEY")
 DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK")
-XAI_BASE_URL = "https://api.x.ai/v1"
-XAI_MODEL = "composer-2.5"
+XAI_BASE_URL = "https://nextbase-model-gateway.infinitycorp.tech/v1/xai"
+COMPOSER_MODEL = "composer-2.5"
 OUTPUT_DIR = Path(__file__).parent / "output"
 
 
@@ -43,12 +44,12 @@ def _fmt_time(seconds: float) -> str:
 
 def generate_summary(transcript_text: str, diarized_entries: list = None) -> str:
     """
-    Generate a meeting summary using xAI Composer 2.5.
+    Generate a meeting summary using Composer 2.5 via NBMG xAI proxy.
+    Uses the OpenAI Responses API format.
     Returns formatted summary with: Meeting Agenda, Overall Summary, Outcome.
     """
-    if not XAI_API_KEY:
-        print("   Skipping summary - XAI_API_KEY not found in .env")
-        print("   Get a free key from: https://console.x.ai")
+    if not NBMG_API_KEY:
+        print("   Skipping summary - NBMG_API_KEY not found in .env")
         return ""
 
     # Build context from diarized transcript if available
@@ -79,32 +80,39 @@ def generate_summary(transcript_text: str, diarized_entries: list = None) -> str
         "Complete ALL three sections."
     )
 
-    print(f"6. Generating meeting summary ({XAI_MODEL} via xAI)...")
+    print(f"6. Generating meeting summary ({COMPOSER_MODEL} via NBMG)...")
 
     try:
-        url = f"{XAI_BASE_URL}/chat/completions"
+        url = f"{XAI_BASE_URL}/responses"
 
         headers = {
-            "Authorization": f"Bearer {XAI_API_KEY}",
+            "Authorization": f"Bearer {NBMG_API_KEY}",
             "Content-Type": "application/json",
         }
 
+        # Responses API format
         payload = {
-            "model": XAI_MODEL,
-            "messages": [
+            "model": COMPOSER_MODEL,
+            "input": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"Here is the meeting transcript:\n\n{context}"},
             ],
-            "max_tokens": 4000,
-            "temperature": 0.3,
         }
 
         response = httpx.post(url, headers=headers, json=payload, timeout=180.0)
         response.raise_for_status()
         result = response.json()
 
-        # OpenAI-compatible response format
-        summary = result["choices"][0]["message"]["content"]
+        # Parse Responses API output
+        # output[0] = reasoning (type: "reasoning"), output[1] = message (type: "message")
+        summary = ""
+        for item in result.get("output", []):
+            if item.get("type") == "message":
+                for content_part in item.get("content", []):
+                    if content_part.get("type") == "output_text":
+                        summary = content_part.get("text", "")
+                        break
+                break
 
         if not summary:
             print("   Warning: API returned empty content.")
@@ -112,10 +120,11 @@ def generate_summary(transcript_text: str, diarized_entries: list = None) -> str
 
         # Token usage
         usage = result.get("usage", {})
-        input_tokens = usage.get("prompt_tokens", 0)
-        output_tokens = usage.get("completion_tokens", 0)
+        input_tokens = usage.get("input_tokens", 0)
+        output_tokens = usage.get("output_tokens", 0)
 
         print(f"   Summary generated! (tokens: {input_tokens} in / {output_tokens} out)")
+        print(f"   Model: {result.get('model', COMPOSER_MODEL)}")
 
         return summary
 
@@ -186,7 +195,7 @@ def transcribe(
 ) -> dict:
     """
     Transcribe an audio file using Sarvam Batch API with speaker diarization,
-    then generate a meeting summary using xAI Composer 2.5.
+    then generate a meeting summary using Composer 2.5.
     """
     if not SARVAM_API_KEY:
         print("SARVAM_API_KEY not found. Set it in .env file.")
@@ -296,7 +305,7 @@ def transcribe(
             count = sum(1 for e in entries if e.get("speaker_id") == sid)
             print(f"   Speaker {int(sid) + 1}: {count} segments")
 
-    # Step 6: Generate meeting summary (xAI Composer 2.5)
+    # Step 6: Generate meeting summary (Composer 2.5 via NBMG)
     summary = ""
     if not skip_summary:
         diarized = result.get("diarized_transcript", {})
@@ -310,7 +319,7 @@ def transcribe(
             summary_path = OUTPUT_DIR / f"{audio_file.stem}_summary.txt"
             with open(summary_path, "w", encoding="utf-8") as f:
                 f.write(f"=== Meeting Summary: {audio_file.name} ===\n")
-                f.write(f"Generated using: {XAI_MODEL} via xAI\n")
+                f.write(f"Generated using: {COMPOSER_MODEL} via NBMG\n")
                 f.write(f"{'=' * 50}\n\n")
                 f.write(summary)
                 f.write("\n")
@@ -347,7 +356,7 @@ def transcribe(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Transcribe audio using Sarvam + xAI Composer 2.5 summary"
+        description="Transcribe audio using Sarvam + Composer 2.5 summary"
     )
     parser.add_argument("audio", help="Path to audio file (mp3, wav, etc.)")
     parser.add_argument(
