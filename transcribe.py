@@ -2,7 +2,7 @@
 """
 Meeting Bot Transcriber
 - Sarvam Batch API for speech-to-text (with diarization)
-- Gemini 2.5 Pro (via NBMG proxy) for meeting summary
+- xAI Composer 2.5 for meeting summary
 
 Usage:
     python transcribe.py <audio_file> [--mode transcribe|translate|verbatim|codemix] [--lang en-IN] [--speakers 2] [--no-summary]
@@ -28,10 +28,10 @@ import httpx
 load_dotenv(Path(__file__).parent / ".env")
 
 SARVAM_API_KEY = os.getenv("SARVAM_API_KEY")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+XAI_API_KEY = os.getenv("XAI_API_KEY")
 DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK")
-GEMINI_BASE_URL = "https://nextbase-model-gateway.infinitycorp.tech/v1/gemini"
-GEMINI_MODEL = "gemini-2.5-pro"
+XAI_BASE_URL = "https://api.x.ai/v1"
+XAI_MODEL = "composer-2.5"
 OUTPUT_DIR = Path(__file__).parent / "output"
 
 
@@ -43,11 +43,12 @@ def _fmt_time(seconds: float) -> str:
 
 def generate_summary(transcript_text: str, diarized_entries: list = None) -> str:
     """
-    Generate a meeting summary using Gemini 2.5 Pro via NBMG proxy.
+    Generate a meeting summary using xAI Composer 2.5.
     Returns formatted summary with: Meeting Agenda, Overall Summary, Outcome.
     """
-    if not GEMINI_API_KEY:
-        print("   Skipping summary - GEMINI_API_KEY not found in .env")
+    if not XAI_API_KEY:
+        print("   Skipping summary - XAI_API_KEY not found in .env")
+        print("   Get a free key from: https://console.x.ai")
         return ""
 
     # Build context from diarized transcript if available
@@ -78,18 +79,18 @@ def generate_summary(transcript_text: str, diarized_entries: list = None) -> str
         "Complete ALL three sections."
     )
 
-    print(f"6. Generating meeting summary ({GEMINI_MODEL} via NBMG)...")
+    print(f"6. Generating meeting summary ({XAI_MODEL} via xAI)...")
 
     try:
-        url = f"{GEMINI_BASE_URL}/chat/completions"
+        url = f"{XAI_BASE_URL}/chat/completions"
 
         headers = {
-            "Authorization": f"Bearer {GEMINI_API_KEY}",
+            "Authorization": f"Bearer {XAI_API_KEY}",
             "Content-Type": "application/json",
         }
 
         payload = {
-            "model": GEMINI_MODEL,
+            "model": XAI_MODEL,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"Here is the meeting transcript:\n\n{context}"},
@@ -115,13 +116,65 @@ def generate_summary(transcript_text: str, diarized_entries: list = None) -> str
         output_tokens = usage.get("completion_tokens", 0)
 
         print(f"   Summary generated! (tokens: {input_tokens} in / {output_tokens} out)")
-        print(f"   Cost: FREE (NBMG proxy)")
 
         return summary
 
     except Exception as e:
         print(f"   Warning: Summary generation failed - {e}")
         return ""
+
+
+def send_to_discord(summary: str, audio_name: str, transcript_path: Path, summary_path: Path):
+    """
+    Send meeting summary text + attach transcript and summary files to Discord via webhook.
+    """
+    if not DISCORD_WEBHOOK:
+        return
+
+    print("\n7. Sending to Discord...")
+
+    try:
+        # Truncate summary for Discord message (max 2000 chars)
+        header = f"**Meeting Summary: {audio_name}**\n\n"
+        max_summary_len = 1900 - len(header)
+        display_summary = summary[:max_summary_len]
+        if len(summary) > max_summary_len:
+            display_summary += "\n\n_(full summary attached as file)_"
+        message_content = header + display_summary
+
+        # Build multipart form data with files
+        files_to_send = {}
+        if transcript_path.exists():
+            files_to_send["file1"] = (
+                transcript_path.name,
+                open(transcript_path, "rb"),
+                "text/plain",
+            )
+        if summary_path.exists():
+            files_to_send["file2"] = (
+                summary_path.name,
+                open(summary_path, "rb"),
+                "text/plain",
+            )
+
+        data = {"content": message_content}
+
+        response = httpx.post(
+            DISCORD_WEBHOOK,
+            data=data,
+            files=list(files_to_send.items()),
+            timeout=30.0,
+        )
+        response.raise_for_status()
+
+        # Close file handles
+        for _, file_tuple in files_to_send.items():
+            file_tuple[1].close()
+
+        print("   Sent to Discord!")
+
+    except Exception as e:
+        print(f"   Warning: Discord webhook failed - {e}")
 
 
 def transcribe(
@@ -133,7 +186,7 @@ def transcribe(
 ) -> dict:
     """
     Transcribe an audio file using Sarvam Batch API with speaker diarization,
-    then generate a meeting summary using Gemini 2.5 Pro.
+    then generate a meeting summary using xAI Composer 2.5.
     """
     if not SARVAM_API_KEY:
         print("SARVAM_API_KEY not found. Set it in .env file.")
@@ -243,7 +296,8 @@ def transcribe(
             count = sum(1 for e in entries if e.get("speaker_id") == sid)
             print(f"   Speaker {int(sid) + 1}: {count} segments")
 
-    # Step 6: Generate meeting summary (Gemini 2.5 Pro via NBMG)
+    # Step 6: Generate meeting summary (xAI Composer 2.5)
+    summary = ""
     if not skip_summary:
         diarized = result.get("diarized_transcript", {})
         entries_for_summary = diarized.get("entries", [])
@@ -256,7 +310,7 @@ def transcribe(
             summary_path = OUTPUT_DIR / f"{audio_file.stem}_summary.txt"
             with open(summary_path, "w", encoding="utf-8") as f:
                 f.write(f"=== Meeting Summary: {audio_file.name} ===\n")
-                f.write(f"Generated using: {GEMINI_MODEL} via NBMG\n")
+                f.write(f"Generated using: {XAI_MODEL} via xAI\n")
                 f.write(f"{'=' * 50}\n\n")
                 f.write(summary)
                 f.write("\n")
@@ -279,70 +333,21 @@ def transcribe(
             print(f"\nSummary saved: {summary_path}")
 
     # Step 7: Send to Discord via webhook
-    if summary and DISCORD_WEBHOOK:
+    if DISCORD_WEBHOOK:
+        summary_path = OUTPUT_DIR / f"{audio_file.stem}_summary.txt"
         send_to_discord(
-            summary=summary,
+            summary=summary if summary else "(Summary generation was skipped or failed)",
             audio_name=audio_file.name,
             transcript_path=readable_path,
-            summary_path=OUTPUT_DIR / f"{audio_file.stem}_summary.txt",
+            summary_path=summary_path,
         )
 
     return result
 
 
-def send_to_discord(summary: str, audio_name: str, transcript_path: Path, summary_path: Path):
-    """
-    Send meeting summary text + attach transcript and summary files to Discord via webhook.
-    """
-    print("\n7. Sending to Discord...")
-
-    try:
-        # Truncate summary for Discord message (max 2000 chars)
-        header = f"**Meeting Summary: {audio_name}**\n\n"
-        max_summary_len = 1900 - len(header)
-        display_summary = summary[:max_summary_len]
-        if len(summary) > max_summary_len:
-            display_summary += "\n\n_(full summary attached as file)_"
-        message_content = header + display_summary
-
-        # Build multipart form data with files
-        files_to_send = {}
-        if transcript_path.exists():
-            files_to_send["file1"] = (
-                transcript_path.name,
-                open(transcript_path, "rb"),
-                "text/plain",
-            )
-        if summary_path.exists():
-            files_to_send["file2"] = (
-                summary_path.name,
-                open(summary_path, "rb"),
-                "text/plain",
-            )
-
-        data = {"content": message_content}
-
-        response = httpx.post(
-            DISCORD_WEBHOOK,
-            data=data,
-            files=list(files_to_send.items()),
-            timeout=30.0,
-        )
-        response.raise_for_status()
-
-        # Close file handles
-        for _, file_tuple in files_to_send.items():
-            file_tuple[1].close()
-
-        print("   Sent to Discord!")
-
-    except Exception as e:
-        print(f"   Warning: Discord webhook failed - {e}")
-
-
 def main():
     parser = argparse.ArgumentParser(
-        description="Transcribe audio using Sarvam + Gemini 2.5 Pro summary"
+        description="Transcribe audio using Sarvam + xAI Composer 2.5 summary"
     )
     parser.add_argument("audio", help="Path to audio file (mp3, wav, etc.)")
     parser.add_argument(
