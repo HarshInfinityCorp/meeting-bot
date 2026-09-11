@@ -33,6 +33,7 @@ NBMG_API_KEY = os.getenv("NBMG_API_KEY")
 DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK")
 XAI_BASE_URL = "https://nextbase-model-gateway.infinitycorp.tech/v1/xai"
 COMPOSER_MODEL = "composer-2.5"
+SPEECH_DIR = Path(__file__).parent / "speech"
 OUTPUT_DIR = Path(__file__).parent / "output"
 
 
@@ -201,10 +202,17 @@ def transcribe(
         print("SARVAM_API_KEY not found. Set it in .env file.")
         sys.exit(1)
 
+    # Look for audio in speech/ folder first, then current dir
     audio_file = Path(audio_path)
     if not audio_file.exists():
-        print(f"Audio file not found: {audio_path}")
-        sys.exit(1)
+        audio_in_speech = SPEECH_DIR / audio_file.name
+        if audio_in_speech.exists():
+            audio_file = audio_in_speech
+        else:
+            print(f"Audio file not found in: {audio_path}")
+            print(f"Also checked: {audio_in_speech}")
+            print(f"Place your audio files in the 'speech/' folder.")
+            sys.exit(1)
 
     file_size_mb = audio_file.stat().st_size / 1024 / 1024
     print(f"File: {audio_file.name} ({file_size_mb:.1f} MB)")

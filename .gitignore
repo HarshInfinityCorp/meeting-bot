@@ -3,3 +3,9 @@ output/
 __pycache__/
 *.pyc
 venv/
+speech/*.mp3
+speech/*.wav
+speech/*.m4a
+speech/*.ogg
+speech/*.flac
+speech/*.webm
