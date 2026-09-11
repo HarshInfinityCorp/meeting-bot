@@ -10,5 +10,6 @@ speech/*.m4a
 speech/*.ogg
 speech/*.flac
 speech/*.webm
+data/meeting-state.json
 speech/*.aac
 speech/*.wma
