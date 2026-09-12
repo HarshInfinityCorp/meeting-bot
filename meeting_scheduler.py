@@ -9,26 +9,28 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 UTC = timezone.utc
+IST = ZoneInfo("Asia/Kolkata")
 
 
 class ScheduleValidationError(ValueError):
     """Raised when a Discord-provided meeting time is invalid."""
 
 
-def parse_utc_time(value: str) -> datetime:
-    """Parse an ISO-8601 timestamp, treating a timezone-free value as UTC."""
+def parse_meeting_time(value: str) -> datetime:
+    """Parse an ISO-8601 timestamp, treating a timezone-free value as IST."""
     try:
         parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
     except ValueError as exc:
         raise ScheduleValidationError(
-            "Use ISO-8601 time, for example `2026-09-15 14:30` (UTC)."
+            "Use ISO-8601 time, for example `2026-09-15 14:30` (IST)."
         ) from exc
 
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC)
+        parsed = parsed.replace(tzinfo=IST)
+    return parsed.astimezone(IST)
 
 
 @dataclass(frozen=True)
@@ -50,8 +52,8 @@ class MeetingSchedule:
         end_time: str,
         now: datetime | None = None,
     ) -> MeetingSchedule:
-        start_at = parse_utc_time(start_time)
-        end_at = parse_utc_time(end_time)
+        start_at = parse_meeting_time(start_time)
+        end_at = parse_meeting_time(end_time)
         current_time = (now or datetime.now(UTC)).astimezone(UTC)
 
         if start_at <= current_time:
@@ -79,8 +81,8 @@ class MeetingSchedule:
             guild_id=int(value["guild_id"]),
             voice_channel_id=int(value["voice_channel_id"]),
             notification_channel_id=int(value["notification_channel_id"]),
-            start_at=parse_utc_time(value["start_at"]),
-            end_at=parse_utc_time(value["end_at"]),
+            start_at=parse_meeting_time(value["start_at"]),
+            end_at=parse_meeting_time(value["end_at"]),
         )
 
 

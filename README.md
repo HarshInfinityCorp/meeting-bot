@@ -33,7 +33,7 @@ It uses `processed.json` to skip audio that has already completed. This is a one
 
 ## Discord commands
 
-All times are ISO-8601 UTC. A timezone-free time is interpreted as UTC.
+All meeting times are IST (`Asia/Kolkata`). A timezone-free ISO-8601 time is interpreted as IST.
 
 - `/meeting start_time:2026-09-15 14:30 end_time:2026-09-15 15:30`
   - Configure the meeting using the invoking user's current voice channel. Replaces that server's previous schedule and scheduled jobs.

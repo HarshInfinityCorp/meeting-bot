@@ -4,18 +4,25 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from meeting_scheduler import (
+    IST,
     MeetingSchedule,
     MeetingStateStore,
     ScheduleValidationError,
-    parse_utc_time,
+    parse_meeting_time,
 )
 
 
 class MeetingSchedulerTests(unittest.TestCase):
-    def test_timezone_free_input_is_utc(self):
+    def test_timezone_free_input_is_ist(self):
         self.assertEqual(
-            parse_utc_time("2026-09-15 14:30"),
-            datetime(2026, 9, 15, 14, 30, tzinfo=timezone.utc),
+            parse_meeting_time("2026-09-15 14:30"),
+            datetime(2026, 9, 15, 14, 30, tzinfo=IST),
+        )
+
+    def test_timezone_aware_input_is_converted_to_ist(self):
+        self.assertEqual(
+            parse_meeting_time("2026-09-15T09:00:00Z"),
+            datetime(2026, 9, 15, 14, 30, tzinfo=IST),
         )
 
     def test_end_must_follow_start(self):

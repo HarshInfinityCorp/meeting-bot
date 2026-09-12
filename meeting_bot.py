@@ -5,7 +5,7 @@ Required .env values:
   DISCORD_BOT_TOKEN=...
   DISCORD_WEBHOOK=...  # existing transcript/audio delivery webhook
 
-Times accepted by /meeting are UTC ISO-8601, e.g. 2026-09-15 14:30.
+Times accepted by /meeting are IST ISO-8601, e.g. 2026-09-15 14:30.
 """
 
 from __future__ import annotations
@@ -262,7 +262,7 @@ class MeetingBot(discord.Bot):
 bot = MeetingBot()
 
 
-@bot.slash_command(name="meeting", description="Create or replace this server's scheduled meeting recording (UTC).")
+@bot.slash_command(name="meeting", description="Create or replace this server's scheduled meeting recording (IST).")
 async def meeting(
     ctx: discord.ApplicationContext,
     start_time: str,
