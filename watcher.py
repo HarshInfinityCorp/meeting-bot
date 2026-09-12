@@ -6,9 +6,8 @@ When a new file is detected → transcribe → summarize → send to Discord.
 Already-processed files are tracked in processed.json and skipped.
 
 Usage:
-    python watcher.py                    # Watch with default 30-minute interval
-    python watcher.py --interval 300     # Check every 5 minutes
-    python watcher.py --once           # Process new files once and exit
+    python watcher.py          # Process each currently unprocessed audio file once
+    python watcher.py --once   # Same one-time processing command (used by meeting-summary)
 """
 
 import os
@@ -115,74 +114,39 @@ def process_file(audio_path: Path, processed: dict) -> bool:
         return False
 
 
-def watch(interval: int = 1800, run_once: bool = False):
-    """
-    Main watcher loop.
-    Scans speech/ folder every `interval` seconds for new audio files.
-    """
+def watch():
+    """Process every currently unprocessed audio file in speech/ once, then exit."""
     print(f"{'=' * 60}")
-    print("MEETING BOT WATCHER")
+    print("MEETING BOT: PROCESS NEW AUDIO")
     print(f"{'=' * 60}")
-    print(f"Watching: {SPEECH_DIR.resolve()}")
+    print(f"Speech folder: {SPEECH_DIR.resolve()}")
     print(f"Tracking: {PROCESSED_FILE.resolve()}")
-    print(f"Interval: {interval}s")
-    print(f"Audio types: {', '.join(sorted(AUDIO_EXTENSIONS))}")
     print()
 
-    # Ensure speech/ folder exists
     SPEECH_DIR.mkdir(parents=True, exist_ok=True)
-
-    # Load tracking data
     processed = load_processed()
+    new_files = get_new_files(processed)
 
-    already_count = len(processed)
-    if already_count > 0:
-        done = sum(1 for v in processed.values() if v.get("status") == "done")
-        failed = sum(1 for v in processed.values() if v.get("status") == "failed")
-        print(f"Previously processed: {done} done, {failed} failed, {already_count} total")
+    if not new_files:
+        print("No unprocessed audio files found.")
+        return
 
-    print(f"\nWaiting for new audio files in speech/ folder...")
-    print("(Press Ctrl+C to stop)\n")
-
-    try:
-        while True:
-            new_files = get_new_files(processed)
-
-            if new_files:
-                print(f"Found {len(new_files)} new file(s)!")
-                for audio_path in new_files:
-                    process_file(audio_path, processed)
-
-            if run_once:
-                if not new_files:
-                    print("No new files found.")
-                break
-
-            time.sleep(interval)
-
-    except KeyboardInterrupt:
-        print("\n\nWatcher stopped.")
-        processed_data = load_processed()
-        done = sum(1 for v in processed_data.values() if v.get("status") == "done")
-        print(f"Total processed: {done} file(s)")
+    print(f"Found {len(new_files)} new file(s)!")
+    for audio_path in new_files:
+        process_file(audio_path, processed)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Watch speech/ folder for new audio files")
-    parser.add_argument(
-        "--interval",
-        type=int,
-        default=1800,
-        help="Check interval in seconds (default: 1800 / 30 minutes)",
+    parser = argparse.ArgumentParser(
+        description="Process currently unprocessed audio files from speech/ once"
     )
     parser.add_argument(
         "--once",
         action="store_true",
-        help="Process new files once and exit (don't keep watching)",
+        help="One-time scan (default behavior; retained for meeting-summary)",
     )
-
-    args = parser.parse_args()
-    watch(interval=args.interval, run_once=args.once)
+    parser.parse_args()
+    watch()
 
 
 if __name__ == "__main__":

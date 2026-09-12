@@ -21,6 +21,16 @@ A Discord voice-channel meeting recorder that saves recordings in `speech/`, upl
    python3 meeting_bot.py
    ```
 
+## Process New Audio on Demand
+
+After a recording has been added to `speech/`, run the one-time processor:
+
+```bash
+python3 watcher.py --once
+```
+
+It uses `processed.json` to skip audio that has already completed. This is a one-time command, not a background polling service.
+
 ## Discord commands
 
 All times are ISO-8601 UTC. A timezone-free time is interpreted as UTC.
