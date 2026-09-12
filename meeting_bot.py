@@ -18,28 +18,31 @@ from pathlib import Path
 from typing import Any
 
 import discord
-import httpx
 from apscheduler.jobstores.base import JobLookupError
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
 
+from audio_mixer import AudioMixError, mix_wav_files
 from meeting_scheduler import (
     MeetingSchedule,
     MeetingStateStore,
     ScheduleValidationError,
 )
-from transcribe import transcribe
+from watcher import process_audio_once
 
 BASE_DIR = Path(__file__).parent
 SPEECH_DIR = BASE_DIR / "speech"
+TEMP_RECORDING_DIR = BASE_DIR / "recording-tmp"
 STATE_FILE = BASE_DIR / "data" / "meeting-state.json"
-WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK")
+ALLOWED_GUILD_ID = 1480508770499956907
+ALLOWED_VOICE_CHANNEL_ID = 1548204696840314890
+OUTPUT_CHANNEL_ID = 1547528564713193473
 UTC = timezone.utc
 LOG = logging.getLogger("meeting-bot")
 
 load_dotenv(BASE_DIR / ".env")
-WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK")
 BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK")
 
 
 class MeetingBot(discord.Bot):
@@ -57,6 +60,14 @@ class MeetingBot(discord.Bot):
     def voice_client_for(self, guild_id: int) -> discord.VoiceClient | None:
         return next((client for client in self.voice_clients if client.guild.id == guild_id), None)
 
+    @staticmethod
+    def is_allowed_schedule(schedule: MeetingSchedule) -> bool:
+        return (
+            schedule.guild_id == ALLOWED_GUILD_ID
+            and schedule.voice_channel_id == ALLOWED_VOICE_CHANNEL_ID
+            and schedule.notification_channel_id == OUTPUT_CHANNEL_ID
+        )
+
     async def on_ready(self) -> None:
         if not self.scheduler.running:
             self.scheduler.start()
@@ -67,7 +78,7 @@ class MeetingBot(discord.Bot):
         """Restore future jobs and safely resume a meeting interrupted by restart."""
         now = datetime.now(UTC)
         for schedule in self.state.schedules():
-            if schedule.end_at <= now:
+            if not self.is_allowed_schedule(schedule) or schedule.end_at <= now:
                 self.state.remove_schedule(schedule.guild_id)
                 self.state.clear_active(schedule.guild_id)
                 continue
@@ -117,7 +128,7 @@ class MeetingBot(discord.Bot):
     async def start_recording(self, guild_id: int, recovery: bool = False) -> bool:
         async with self.lock_for(guild_id):
             schedule = self.state.get_schedule(guild_id)
-            if not schedule:
+            if not schedule or not self.is_allowed_schedule(schedule):
                 return False
             now = datetime.now(UTC)
             if now >= schedule.end_at:
@@ -149,7 +160,12 @@ class MeetingBot(discord.Bot):
                         "source": "recovery" if recovery else "scheduled",
                     },
                 )
-                voice_client.start_recording(discord.sinks.WaveSink(), self.recording_finished, channel)
+                voice_client.start_recording(
+                    discord.sinks.WaveSink(),
+                    self.recording_finished,
+                    channel,
+                    sync_start=True,
+                )
                 suffix = " (recovered after restart)" if recovery else ""
                 await self.notify(schedule, f"🔴 Meeting recording started{suffix}.")
                 return True
@@ -184,40 +200,43 @@ class MeetingBot(discord.Bot):
                 return False
 
     async def recording_finished(self, sink: Any, channel: discord.abc.GuildChannel, *_: Any) -> None:
-        """Persist Pycord's per-speaker WAV streams, deliver audio, then transcribe."""
+        """Save one mixed meeting WAV, then invoke the normal one-shot processor."""
         guild_id = channel.guild.id
         schedule = self.state.get_schedule(guild_id)
         active = self.state.get_active(guild_id) or {}
         self.state.clear_active(guild_id)
-        if not schedule:
+        if not schedule or not self.is_allowed_schedule(schedule):
             return
 
         try:
             SPEECH_DIR.mkdir(exist_ok=True)
+            TEMP_RECORDING_DIR.mkdir(exist_ok=True)
             timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-            recordings: list[Path] = []
+            participant_files: list[Path] = []
             for user_id, audio in sink.audio_data.items():
-                # Pycord exposes a BytesIO WAV file for every participant.
-                target = SPEECH_DIR / f"meeting-{guild_id}-{timestamp}-user-{user_id}.wav"
+                target = TEMP_RECORDING_DIR / f"meeting-{guild_id}-{timestamp}-user-{user_id}.wav"
                 audio.file.seek(0)
                 target.write_bytes(audio.file.read())
-                recordings.append(target)
+                participant_files.append(target)
 
-            if not recordings:
+            if not participant_files:
                 await self.notify(schedule, "⚠️ Meeting recording stopped, but no participant audio was captured.")
                 return
+
+            meeting_file = SPEECH_DIR / f"meeting-{guild_id}-{timestamp}.wav"
+            await asyncio.to_thread(mix_wav_files, participant_files, meeting_file)
+            for participant_file in participant_files:
+                participant_file.unlink(missing_ok=True)
 
             source = active.get("stop_source", "scheduled")
             self.remove_jobs(guild_id)
             self.state.remove_schedule(guild_id)
             await self.notify(
                 schedule,
-                f"⏹️ Meeting recording stopped ({source}). Saved {len(recordings)} audio file(s); transcription has started.",
+                f"⏹️ Meeting recording stopped ({source}). Saved `{meeting_file.name}`; transcription has started.",
             )
-            await self.send_audio_webhook(recordings, guild_id)
-            for recording in recordings:
-                asyncio.create_task(asyncio.to_thread(transcribe, str(recording)))
-        except Exception as exc:
+            asyncio.create_task(self.process_recording(schedule, meeting_file))
+        except (AudioMixError, OSError, ValueError) as exc:
             LOG.exception("Unable to finalize recording for guild %s", guild_id)
             await self.notify(schedule, f"⚠️ Meeting recording failed while saving: `{type(exc).__name__}`")
         finally:
@@ -225,25 +244,15 @@ class MeetingBot(discord.Bot):
             if voice_client and voice_client.is_connected():
                 await voice_client.disconnect(force=True)
 
-    async def send_audio_webhook(self, recordings: list[Path], guild_id: int) -> None:
-        """Attach the saved audio to the existing Discord webhook before transcription."""
-        if not WEBHOOK_URL:
-            raise RuntimeError("DISCORD_WEBHOOK is not configured")
-
-        # Discord permits up to 10 attachments in one webhook request.
-        for offset in range(0, len(recordings), 10):
-            batch = recordings[offset : offset + 10]
-            files = [
-                (f"files[{index}]", (recording.name, recording.read_bytes(), "audio/wav"))
-                for index, recording in enumerate(batch)
-            ]
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                response = await client.post(
-                    WEBHOOK_URL,
-                    data={"content": f"🎙️ Meeting recording saved (guild {guild_id})."},
-                    files=files,
-                )
-                response.raise_for_status()
+    async def process_recording(self, schedule: MeetingSchedule, meeting_file: Path) -> None:
+        """Run the same one-shot processor used by manual meeting-summary uploads."""
+        try:
+            processed = await asyncio.to_thread(process_audio_once, meeting_file)
+            if not processed:
+                await self.notify(schedule, f"⚠️ Processing skipped for `{meeting_file.name}`.")
+        except Exception as exc:
+            LOG.exception("Unable to process meeting recording %s", meeting_file)
+            await self.notify(schedule, f"⚠️ Meeting transcription failed: `{type(exc).__name__}`")
 
 
 bot = MeetingBot()
@@ -255,8 +264,14 @@ async def meeting(
     start_time: str,
     end_time: str,
 ) -> None:
-    if ctx.guild is None or ctx.author.voice is None or ctx.author.voice.channel is None:
-        await ctx.respond("Join the voice channel to record, then run `/meeting` again.", ephemeral=True)
+    if ctx.guild is None or ctx.guild.id != ALLOWED_GUILD_ID or ctx.channel_id != OUTPUT_CHANNEL_ID:
+        await ctx.respond("Meeting recording can only be configured in #meeting-summary.", ephemeral=True)
+        return
+    if ctx.author.voice is None or ctx.author.voice.channel is None:
+        await ctx.respond("Join the meeting-bot voice channel, then run `/meeting` again.", ephemeral=True)
+        return
+    if ctx.author.voice.channel.id != ALLOWED_VOICE_CHANNEL_ID:
+        await ctx.respond("Recording is restricted to the meeting-bot voice channel.", ephemeral=True)
         return
 
     try:
@@ -284,8 +299,8 @@ async def meeting(
 
 @bot.slash_command(name="meeting_stop", description="Stop the active meeting recording now.")
 async def meeting_stop(ctx: discord.ApplicationContext) -> None:
-    if ctx.guild is None:
-        await ctx.respond("This command can only be used in a server.", ephemeral=True)
+    if ctx.guild is None or ctx.guild.id != ALLOWED_GUILD_ID or ctx.channel_id != OUTPUT_CHANNEL_ID:
+        await ctx.respond("Meeting recording can only be controlled in #meeting-summary.", ephemeral=True)
         return
     if await bot.stop_recording(ctx.guild.id, "manual"):
         await ctx.respond("⏹️ Stopping the active recording. Audio will be saved and transcribed shortly.")
@@ -295,8 +310,8 @@ async def meeting_stop(ctx: discord.ApplicationContext) -> None:
 
 @bot.slash_command(name="meeting_status", description="Show this server's meeting schedule and recording state.")
 async def meeting_status(ctx: discord.ApplicationContext) -> None:
-    if ctx.guild is None:
-        await ctx.respond("This command can only be used in a server.", ephemeral=True)
+    if ctx.guild is None or ctx.guild.id != ALLOWED_GUILD_ID or ctx.channel_id != OUTPUT_CHANNEL_ID:
+        await ctx.respond("Meeting recording status is only available in #meeting-summary.", ephemeral=True)
         return
     schedule = bot.state.get_schedule(ctx.guild.id)
     active = bot.state.get_active(ctx.guild.id)

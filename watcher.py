@@ -10,13 +10,12 @@ Usage:
     python watcher.py --once   # Same one-time processing command (used by meeting-summary)
 """
 
-import os
-import sys
+import argparse
 import json
 import time
-import argparse
 from datetime import datetime, timezone
 from pathlib import Path
+
 from dotenv import load_dotenv
 
 # Load .env from script directory
@@ -33,7 +32,7 @@ def load_processed() -> dict:
         try:
             with open(PROCESSED_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except (json.JSONDecodeError, IOError):
+        except (OSError, json.JSONDecodeError):
             return {}
     return {}
 
@@ -52,19 +51,22 @@ def get_new_files(processed: dict) -> list:
 
     new_files = []
     for file_path in sorted(SPEECH_DIR.iterdir()):
-        if file_path.is_file() and file_path.suffix.lower() in AUDIO_EXTENSIONS:
-            if file_path.name not in processed:
-                # Check file is not still being written (size stable for 2 seconds)
-                try:
-                    size1 = file_path.stat().st_size
-                    time.sleep(2)
-                    size2 = file_path.stat().st_size
-                    if size1 == size2 and size1 > 0:
-                        new_files.append(file_path)
-                    else:
-                        print(f"   Skipping {file_path.name} (still being written...)")
-                except OSError:
-                    continue
+        if (
+            file_path.is_file()
+            and file_path.suffix.lower() in AUDIO_EXTENSIONS
+            and file_path.name not in processed
+        ):
+            # Check file is not still being written (size stable for 2 seconds)
+            try:
+                size1 = file_path.stat().st_size
+                time.sleep(2)
+                size2 = file_path.stat().st_size
+                if size1 == size2 and size1 > 0:
+                    new_files.append(file_path)
+                else:
+                    print(f"   Skipping {file_path.name} (still being written...)")
+            except OSError:
+                continue
     return new_files
 
 
@@ -103,7 +105,7 @@ def process_file(audio_path: Path, processed: dict) -> bool:
         print(f"{'=' * 60}\n")
         return True
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - persist and report all pipeline failures.
         # Mark as failed
         processed[audio_path.name]["status"] = "failed"
         processed[audio_path.name]["error"] = str(e)
@@ -112,6 +114,22 @@ def process_file(audio_path: Path, processed: dict) -> bool:
 
         print(f"\nERROR processing {audio_path.name}: {e}")
         return False
+
+
+def process_audio_once(audio_path: Path) -> bool:
+    """Process exactly one meeting recording, using the normal processed-file guard."""
+    resolved_audio = audio_path.resolve()
+    if resolved_audio.parent != SPEECH_DIR.resolve():
+        raise ValueError("Audio file must be inside the speech/ directory.")
+    if not resolved_audio.is_file():
+        raise FileNotFoundError(resolved_audio)
+
+    processed = load_processed()
+    current = processed.get(resolved_audio.name, {})
+    if current.get("status") in {"processing", "done"}:
+        print(f"Skipping {resolved_audio.name}: already {current['status']}.")
+        return False
+    return process_file(resolved_audio, processed)
 
 
 def watch():
@@ -145,8 +163,15 @@ def main():
         action="store_true",
         help="One-time scan (default behavior; retained for meeting-summary)",
     )
-    parser.parse_args()
-    watch()
+    parser.add_argument(
+        "--file",
+        help="Process one audio file from speech/ exactly once.",
+    )
+    args = parser.parse_args()
+    if args.file:
+        process_audio_once(Path(args.file))
+    else:
+        watch()
 
 
 if __name__ == "__main__":

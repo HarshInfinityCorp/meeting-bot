@@ -15,7 +15,7 @@ A Discord voice-channel meeting recorder that saves recordings in `speech/`, upl
    SARVAM_API_KEY=...
    NBMG_API_KEY=...
    ```
-3. In the Discord Developer Portal, invite the bot with the `bot` and `applications.commands` scopes. It needs **View Channel**, **Connect**, **Speak**, **Use Voice Activity**, **Send Messages**, and **Attach Files** in the relevant channels.
+3. In the Discord Developer Portal, invite the dedicated recorder bot with the `bot` and `applications.commands` scopes. It needs **View Channel** and **Connect** in the configured voice channel, plus **View Channel**, **Send Messages**, and **Attach Files** in the output channel.
 4. Start it:
    ```bash
    python3 meeting_bot.py
@@ -46,4 +46,12 @@ Schedules and active state are stored atomically in `data/meeting-state.json`. O
 
 ## Recording behavior
 
-Pycord produces a WAV file per participant. Those files are saved as `speech/meeting-<guild>-<timestamp>-user-<id>.wav`, attached to the configured webhook, and individually passed to `transcribe.py`. This preserves speaker audio without lossy mixing and lets the existing diarized transcription pipeline post its normal summary and transcript.
+This deployment is locked to one Discord server, the `meeting-bot` voice channel, and the `#meeting-summary` output channel. Commands from another server/channel or a different voice channel are rejected.
+
+Pycord writes temporary WAV data per participant. With synchronized capture enabled, the bot stream-mixes those files into exactly one final recording:
+
+```text
+speech/meeting-<guild>-<timestamp>.wav
+```
+
+The final WAV remains on the server and is not uploaded as a potentially large Discord attachment. The bot calls the same one-shot processor used by `python3 watcher.py --once` exactly once for that final file. The existing `transcribe.py` webhook flow then posts the transcript and summary to Discord.

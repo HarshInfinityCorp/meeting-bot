@@ -11,5 +11,7 @@ speech/*.ogg
 speech/*.flac
 speech/*.webm
 data/meeting-state.json
+processed.json
+recording-tmp/
 speech/*.aac
 speech/*.wma
