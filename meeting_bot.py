@@ -8,8 +8,6 @@ Required .env values:
 Times accepted by /meeting are IST ISO-8601, e.g. 2026-09-15 14:30.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import os
