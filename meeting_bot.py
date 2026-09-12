@@ -20,7 +20,7 @@ from typing import Any
 import discord
 from apscheduler.jobstores.base import JobLookupError
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 
 from audio_mixer import AudioMixError, mix_wav_files
 from meeting_scheduler import (
@@ -40,9 +40,13 @@ OUTPUT_CHANNEL_ID = 1547528564713193473
 UTC = timezone.utc
 LOG = logging.getLogger("meeting-bot")
 
-load_dotenv(BASE_DIR / ".env")
-BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK")
+ENV_FILE = BASE_DIR / ".env"
+load_dotenv(ENV_FILE)
+REPO_ENV = dotenv_values(ENV_FILE)
+# The managed host exports Frontend Warriors' token. Use the dedicated
+# recorder credentials from this repository instead of inherited values.
+BOT_TOKEN = REPO_ENV.get("DISCORD_BOT_TOKEN")
+WEBHOOK_URL = REPO_ENV.get("DISCORD_WEBHOOK")
 
 
 class MeetingBot(discord.Bot):

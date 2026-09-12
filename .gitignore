@@ -3,6 +3,7 @@ output/
 __pycache__/
 *.pyc
 venv/
+.deps/
 processed.json
 speech/*.mp3
 speech/*.wav
